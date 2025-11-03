@@ -1,0 +1,49 @@
+version: "0.5"
+
+environment:
+  - "PYTHONPATH=/app"
+  - "PORT=8000"
+
+log_level: info
+log_configuration:
+  add_timestamp: true
+  no_metadata: false
+
+processes:
+  k8s-health-monitor:
+    command: "uv run gunicorn src.k8s_health_monitor.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"
+    working_dir: "/app"
+    restart_policy:
+      restart: on_failure
+      max_restarts: 5
+      backoff_seconds: 2
+    readiness_probe:
+      http_get:
+        host: localhost
+        port: 8000
+        path: "/health"
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    liveness_probe:
+      http_get:
+        host: localhost  
+        port: 8000
+        path: "/health"
+      initial_delay_seconds: 30
+      period_seconds: 60
+      timeout_seconds: 5
+      failure_threshold: 3
+    environment:
+      - "PROCESS_NAME=k8s-health-monitor"
+      - "PROCESS_TYPE=web"
+    depends_on:
+      health-checker:
+        condition: process_started
+        
+  health-checker:
+    command: "sleep 5 && echo 'Health checker ready'"
+    restart_policy:
+      restart: "no"
