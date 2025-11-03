@@ -63,23 +63,25 @@
 ```
 
 ### 🔗 **Service URLs** (via k3d loadbalancer)
-- **📊 Health Monitor**: https://monitor.127-0-0-1.sslip.io:8443/
-- **🚀 ArgoCD**: https://argocd.127-0-0-1.sslip.io:8443/  
-- **📦 Gitea**: https://gitea.127-0-0-1.sslip.io:8443/
+- **📊 Health Monitor**: https://monitor.127-0-0-1.sslip.io/
+- **🚀 ArgoCD**: https://argocd.127-0-0-1.sslip.io/  
+- **📦 Gitea**: https://gitea.127-0-0-1.sslip.io/
+
+*Uses standard ports 80/443 when available, fallback to 8080/8443 if ports are in use*
 
 ### 🔌 **API Examples**
 ```bash
 # Health check
-curl -k https://monitor.127-0-0-1.sslip.io:8443/health
+curl -k https://monitor.127-0-0-1.sslip.io/health
 
 # Cluster status
-curl -k https://monitor.127-0-0-1.sslip.io:8443/cluster
+curl -k https://monitor.127-0-0-1.sslip.io/cluster
 
 # System resources
-curl -k https://monitor.127-0-0-1.sslip.io:8443/processes/system
+curl -k https://monitor.127-0-0-1.sslip.io/processes/system
 
 # Top processes
-curl -k 'https://monitor.127-0-0-1.sslip.io:8443/processes/top?limit=5'
+curl -k 'https://monitor.127-0-0-1.sslip.io/processes/top?limit=5'
 ```
 
 ## Development
@@ -102,10 +104,11 @@ docker push registry.localhost:5001/k8s-health-monitor:latest
 ## Architecture
 
 ### k3d Integration
-- **Loadbalancer**: Built-in k3d loadbalancer on ports 8086 (HTTP) and 8443 (HTTPS)
+- **Loadbalancer**: Built-in k3d loadbalancer on standard ports 80/443 (fallback to 8080/8443)
 - **DNS**: /etc/hosts entries for *.127-0-0-1.sslip.io domains
 - **Certificates**: mkcert-generated TLS certificates via cert-manager
 - **No Port Forwarding**: Direct access via k3d's built-in networking
+- **Clean URLs**: No port numbers needed when using standard ports
 
 ### GitOps Workflow
 1. **Infrastructure**: Deploy via `./standalone.sh` (k3d, ArgoCD, Gitea)
