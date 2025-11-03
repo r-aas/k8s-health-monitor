@@ -54,12 +54,41 @@
 
 ## Quick Start
 
+### 🚀 **One-Command Setup** (Recommended)
+```bash
+# Start complete system with health monitoring
+task up
+
+# Check system status
+task status
+
+# Stop complete system  
+task down
+```
+
+### 📋 **Manual Setup** (Alternative)
 ```bash
 # Deploy complete GitOps platform with health monitoring
-./standalone.sh
+cd ../k8s-base-cluster && ./standalone.sh
+
+# Build and deploy health monitor
+docker build -t registry.localhost:5001/k8s-health-monitor:latest . && \
+docker push registry.localhost:5001/k8s-health-monitor:latest && \
+kubectl apply -f manifests/deployment.yaml
 
 # Access services (no port forwarding needed!)
 ./access-services.sh
+```
+
+### 🔧 **Task Commands**
+```bash
+task help       # Show all available commands
+task up         # Start complete system
+task down       # Stop complete system  
+task status     # Show system status
+task test       # Test all APIs
+task logs       # View health monitor logs
+task redeploy   # Rebuild and redeploy
 ```
 
 ### 🔗 **Service URLs** (via k3d loadbalancer)

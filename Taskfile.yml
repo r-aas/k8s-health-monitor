@@ -1,0 +1,201 @@
+# K8s Health Monitor - Task Runner
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  CLUSTER_NAME: standalone-cluster
+  IMAGE_NAME: registry.localhost:5001/k8s-health-monitor:latest
+  K8S_BASE_DIR: ../k8s-base-cluster
+
+tasks:
+  up:
+    desc: "🚀 Bring up complete GitOps platform with health monitoring"
+    deps: [cluster-up, build, deploy]
+    cmds:
+      - echo "✅ Complete system is up and running!"
+      - task: status
+
+  down:
+    desc: "⏹️ Tear down complete system"
+    cmds:
+      - echo "🛑 Stopping complete GitOps platform..."
+      - cmd: kubectl delete -f manifests/deployment.yaml
+        ignore_error: true
+      - cmd: "{{.K8S_BASE_DIR}}/k8s-tools/k3d cluster delete {{.CLUSTER_NAME}}"
+        ignore_error: true
+      - echo "✅ System completely shut down"
+
+  restart:
+    desc: "🔄 Restart the complete system"
+    cmds:
+      - task: down
+      - task: up
+
+  cluster-up:
+    desc: "☸️ Start k3d cluster and GitOps platform"
+    cmds:
+      - echo "🔧 Starting k3d cluster and GitOps platform..."
+      - cd {{.K8S_BASE_DIR}} && ./standalone.sh
+    status:
+      - '{{.K8S_BASE_DIR}}/k8s-tools/k3d cluster list | grep "{{.CLUSTER_NAME}}.*1/1.*0/0.*true"'
+
+  cluster-down:
+    desc: "⏹️ Stop k3d cluster only"
+    cmds:
+      - echo "🛑 Stopping k3d cluster..."
+      - "{{.K8S_BASE_DIR}}/k8s-tools/k3d cluster delete {{.CLUSTER_NAME}}"
+
+  build:
+    desc: "🔨 Build and push health monitor container"
+    cmds:
+      - echo "🔨 Building health monitor container..."
+      - docker build -t {{.IMAGE_NAME}} .
+      - docker push {{.IMAGE_NAME}}
+    sources:
+      - src/**/*.py
+      - Dockerfile
+      - pyproject.toml
+
+  deploy:
+    desc: "🚀 Deploy health monitor to cluster"
+    deps: [wait-cluster]
+    cmds:
+      - echo "🚀 Deploying health monitor..."
+      - kubectl apply -f manifests/deployment.yaml
+      - kubectl rollout status deployment/k8s-health-monitor -n monitoring --timeout=300s
+      - echo "✅ Health monitor deployed successfully"
+
+  redeploy:
+    desc: "🔄 Rebuild and redeploy health monitor"
+    cmds:
+      - task: build
+      - kubectl rollout restart deployment/k8s-health-monitor -n monitoring
+      - kubectl rollout status deployment/k8s-health-monitor -n monitoring --timeout=300s
+      - echo "✅ Health monitor redeployed"
+
+  wait-cluster:
+    desc: "⏳ Wait for cluster to be ready"
+    cmds:
+      - echo "⏳ Waiting for cluster to be ready..."
+      - |
+        for i in {1..60}; do
+          if kubectl get nodes --no-headers 2>/dev/null | grep -q Ready; then
+            echo "✅ Cluster is ready"
+            exit 0
+          fi
+          echo "  Waiting for cluster... ($i/60)"
+          sleep 5
+        done
+        echo "❌ Cluster failed to become ready"
+        exit 1
+
+  status:
+    desc: "📊 Show complete system status"
+    cmds:
+      - echo "📊 K8s Health Monitor - System Status"
+      - echo "====================================="
+      - echo ""
+      - |
+        if {{.K8S_BASE_DIR}}/k8s-tools/k3d cluster list | grep -q "{{.CLUSTER_NAME}}.*1/1.*0/0.*true"; then
+          echo "✅ Cluster: {{.CLUSTER_NAME}} is running"
+        else
+          echo "❌ Cluster: {{.CLUSTER_NAME}} is not running"
+          exit 0
+        fi
+      - echo ""
+      - echo "🎯 Pod Status:"
+      - |
+        TOTAL=$(kubectl get pods -A --no-headers | wc -l)
+        RUNNING=$(kubectl get pods -A --no-headers | grep Running | wc -l)
+        echo "  Running: $RUNNING/$TOTAL pods"
+      - echo ""
+      - echo "🔗 Service Access:"
+      - ./access-services.sh | grep -E "(Health Monitor|ArgoCD|Gitea|Test App):"
+      - echo ""
+      - echo "💡 Quick Commands:"
+      - echo "  task logs    - View health monitor logs"
+      - echo "  task shell   - Shell into health monitor pod"
+      - echo "  task test    - Run API tests"
+
+  logs:
+    desc: "📋 View health monitor logs"
+    cmds:
+      - kubectl logs -f deployment/k8s-health-monitor -n monitoring
+
+  shell:
+    desc: "🐚 Shell into health monitor pod"
+    cmds:
+      - kubectl exec -it deployment/k8s-health-monitor -n monitoring -- /bin/bash
+
+  test:
+    desc: "🧪 Test health monitor APIs"
+    cmds:
+      - echo "🧪 Testing Health Monitor APIs..."
+      - |
+        BASE_URL=$(./access-services.sh | grep "Health Monitor:" | sed 's/.*https:/https:/' | sed 's/\/$//')
+        echo "Testing: $BASE_URL"
+        
+        echo "  ✓ Health check..."
+        curl -sk "$BASE_URL/health" | jq -r .status
+        
+        echo "  ✓ Cluster status..."
+        curl -sk "$BASE_URL/cluster" | jq -r .healthy
+        
+        echo "  ✓ System resources..."
+        curl -sk "$BASE_URL/processes/system" | jq -r '.cpu_percent, .memory_percent'
+        
+        echo "✅ All API tests passed"
+
+  clean:
+    desc: "🧹 Clean up docker images and build cache"
+    cmds:
+      - echo "🧹 Cleaning up..."
+      - cmd: docker rmi {{.IMAGE_NAME}}
+        ignore_error: true
+      - docker builder prune -f
+      - echo "✅ Cleanup complete"
+
+  dev:
+    desc: "🛠️ Start local development mode"
+    cmds:
+      - echo "🛠️ Starting development mode..."
+      - echo "💡 Make sure you have kubectl context set to your cluster"
+      - uv run src/k8s_health_monitor/main.py
+
+  dev-setup:
+    desc: "⚙️ Setup development environment"
+    cmds:
+      - echo "⚙️ Setting up development environment..."
+      - uv sync
+      - echo "✅ Development environment ready"
+      - echo "💡 Run 'task dev' to start local development"
+
+  help:
+    desc: "❓ Show available commands"
+    cmds:
+      - echo "🎯 K8s Health Monitor - Available Commands"
+      - echo "========================================"
+      - echo ""
+      - echo "🚀 Main Commands:"
+      - echo "  task up        - Start complete system"
+      - echo "  task down      - Stop complete system"  
+      - echo "  task restart   - Restart complete system"
+      - echo "  task status    - Show system status"
+      - echo ""
+      - echo "🔧 Development:"
+      - echo "  task dev-setup - Setup development environment"
+      - echo "  task dev       - Run locally"
+      - echo "  task build     - Build container"
+      - echo "  task redeploy  - Rebuild and redeploy"
+      - echo ""
+      - echo "🧪 Operations:"
+      - echo "  task test      - Test APIs"
+      - echo "  task logs      - View logs"
+      - echo "  task shell     - Shell into pod"
+      - echo "  task clean     - Clean up"
+
+  default:
+    desc: "Default task shows help"
+    cmds:
+      - task: help
