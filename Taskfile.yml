@@ -22,6 +22,10 @@ tasks:
       - echo "🛑 Stopping complete GitOps platform..."
       - cmd: kubectl delete -f manifests/deployment.yaml
         ignore_error: true
+      - cmd: kubectl delete -f manifests/gitea.yaml
+        ignore_error: true
+      - cmd: helm uninstall gitea -n git
+        ignore_error: true
       - cmd: "{{.K8S_BASE_DIR}}/k8s-tools/k3d cluster delete {{.CLUSTER_NAME}}"
         ignore_error: true
       - echo "✅ System completely shut down"
@@ -37,6 +41,9 @@ tasks:
     cmds:
       - echo "🔧 Starting k3d cluster and GitOps platform..."
       - cd {{.K8S_BASE_DIR}} && ./standalone.sh
+      - echo "📦 Adding Gitea helm repository..."
+      - "{{.K8S_BASE_DIR}}/k8s-tools/helm repo add gitea-charts https://dl.gitea.io/charts/ || true"
+      - "{{.K8S_BASE_DIR}}/k8s-tools/helm repo update"
     status:
       - '{{.K8S_BASE_DIR}}/k8s-tools/k3d cluster list | grep "{{.CLUSTER_NAME}}.*1/1.*0/0.*true"'
 
@@ -59,12 +66,34 @@ tasks:
 
   deploy:
     desc: "🚀 Deploy health monitor to cluster"
-    deps: [wait-cluster]
+    deps: [wait-cluster, deploy-gitea]
     cmds:
       - echo "🚀 Deploying health monitor..."
       - kubectl apply -f manifests/deployment.yaml
       - kubectl rollout status deployment/k8s-health-monitor -n monitoring --timeout=300s
       - echo "✅ Health monitor deployed successfully"
+
+  deploy-gitea:
+    desc: "📦 Deploy Gitea with helm and ingress"
+    deps: [wait-cluster]
+    cmds:
+      - echo "📦 Deploying Gitea..."
+      - kubectl apply -f manifests/gitea.yaml
+      - |
+        if ! helm list -n git | grep -q gitea; then
+          helm upgrade --install gitea gitea-charts/gitea \
+            --namespace git \
+            --set gitea.admin.username=admin \
+            --set gitea.admin.password=admin123 \
+            --set gitea.admin.email=admin@example.com \
+            --set service.http.type=ClusterIP \
+            --set ingress.enabled=false \
+            --wait --timeout=300s
+        else
+          echo "  Gitea already deployed"
+        fi
+      - kubectl wait --for=condition=Ready certificate/gitea-tls -n git --timeout=120s
+      - echo "✅ Gitea deployed successfully"
 
   redeploy:
     desc: "🔄 Rebuild and redeploy health monitor"
