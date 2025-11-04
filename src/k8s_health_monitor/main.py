@@ -138,7 +138,7 @@ async def dashboard():
                 </div>
                 
                 <div class="card">
-                    <h2>🔄 GitOps</h2>
+                    <h2>🔄 GitOps Platform</h2>
                     <div id="argocd-status">Loading...</div>
                 </div>
                 
@@ -192,15 +192,39 @@ async def dashboard():
                             <p><span class="${svc.status === 'healthy' ? 'status-ok' : 'status-error'}">●</span> ${svc.service}</p>
                         `).join('');
 
-                    // Load ArgoCD
+                    // Load GitOps Platform Status
                     try {
-                        const argocd = await fetch('/argocd').then(r => r.json());
-                        document.getElementById('argocd-status').innerHTML = 
-                            argocd.applications.map(app => `
-                                <p><span class="${app.health === 'Healthy' && app.sync === 'Synced' ? 'status-ok' : 'status-warning'}">●</span> ${app.name}</p>
-                            `).join('');
+                        const gitops = await fetch('/gitops').then(r => r.json());
+                        const components = gitops.components;
+                        
+                        const getStatusIcon = (component) => {
+                            if (!component) return '⚫';
+                            switch(component.status) {
+                                case 'healthy': return '🟢';
+                                case 'unhealthy': return '🔴';
+                                case 'warning': return '🟡';
+                                default: return '⚫';
+                            }
+                        };
+                        
+                        document.getElementById('argocd-status').innerHTML = `
+                            <div style="margin-bottom: 10px;">
+                                <strong>Platform: </strong>
+                                <span class="${gitops.platform_healthy ? 'status-ok' : 'status-error'}">
+                                    ${gitops.platform_healthy ? '✅ Healthy' : '❌ Issues'}
+                                </span>
+                            </div>
+                            <div style="font-size: 12px;">
+                                <p>${getStatusIcon(components.gitops)} GitOps (ArgoCD)</p>
+                                <p>${getStatusIcon(components.git_repository)} Git Server (Gitea)</p>
+                                <p>${getStatusIcon(components.ingress)} Ingress (Traefik)</p>
+                                <p>${getStatusIcon(components.tls_manager)} TLS (cert-manager)</p>
+                                <p>${getStatusIcon(components.registry)} Registry</p>
+                                <p>${getStatusIcon(components.loadbalancer)} LoadBalancer</p>
+                            </div>
+                        `;
                     } catch {
-                        document.getElementById('argocd-status').innerHTML = '<p class="status-warning">ArgoCD not available</p>';
+                        document.getElementById('argocd-status').innerHTML = '<p class="status-warning">GitOps platform check failed</p>';
                     }
 
                     // Load system resources
@@ -410,42 +434,56 @@ async def services_health():
 
 
 async def get_services_health():
-    """Internal function to check service health"""
+    """Internal function to check comprehensive GitOps platform health"""
     services = []
     
-    # Check ArgoCD
+    # Check ArgoCD (GitOps)
     try:
         argocd_pods = v1.list_namespaced_pod("argocd", label_selector="app.kubernetes.io/name=argocd-server")
-        if argocd_pods.items and all(pod.status.phase == "Running" for pod in argocd_pods.items):
+        argocd_svc = v1.list_namespaced_service("argocd", field_selector="metadata.name=argocd-server")
+        
+        pod_status = argocd_pods.items and all(pod.status.phase == "Running" for pod in argocd_pods.items)
+        svc_status = len(argocd_svc.items) > 0
+        
+        if pod_status and svc_status:
             services.append(HealthStatus(
                 service="ArgoCD",
                 status="healthy",
-                message="Server pods running",
+                message=f"GitOps controller ready ({len(argocd_pods.items)} pods)",
                 timestamp=datetime.now()
             ))
         else:
             services.append(HealthStatus(
                 service="ArgoCD",
                 status="unhealthy",
-                message="Server pods not ready",
+                message="GitOps controller not ready",
                 timestamp=datetime.now()
             ))
     except Exception as e:
         services.append(HealthStatus(
             service="ArgoCD",
             status="error",
-            message=f"Failed to check: {e}",
+            message=f"GitOps check failed: {e}",
             timestamp=datetime.now()
         ))
     
-    # Check Gitea
+    # Check Gitea (Git Repository)
     try:
         gitea_pods = v1.list_namespaced_pod("git", label_selector="app.kubernetes.io/name=gitea")
-        if gitea_pods.items and all(pod.status.phase == "Running" for pod in gitea_pods.items):
+        gitea_svc = v1.list_namespaced_service("git", field_selector="metadata.name=gitea-http")
+        
+        # Also check database pods
+        db_pods = v1.list_namespaced_pod("git", label_selector="app.kubernetes.io/component=postgresql")
+        
+        pod_status = gitea_pods.items and all(pod.status.phase == "Running" for pod in gitea_pods.items)
+        db_status = db_pods.items and all(pod.status.phase == "Running" for pod in db_pods.items)
+        svc_status = len(gitea_svc.items) > 0
+        
+        if pod_status and db_status and svc_status:
             services.append(HealthStatus(
                 service="Gitea",
                 status="healthy",
-                message="Git server running",
+                message=f"Git server ready (app: {len(gitea_pods.items)}, db: {len(db_pods.items)} pods)",
                 timestamp=datetime.now()
             ))
         else:
@@ -459,18 +497,23 @@ async def get_services_health():
         services.append(HealthStatus(
             service="Gitea",
             status="error",
-            message=f"Failed to check: {e}",
+            message=f"Git server check failed: {e}",
             timestamp=datetime.now()
         ))
     
-    # Check Traefik
+    # Check Traefik (Ingress)
     try:
         traefik_pods = v1.list_namespaced_pod("kube-system", label_selector="app.kubernetes.io/name=traefik")
-        if traefik_pods.items and all(pod.status.phase == "Running" for pod in traefik_pods.items):
+        traefik_svc = v1.list_namespaced_service("kube-system", field_selector="metadata.name=traefik")
+        
+        pod_status = traefik_pods.items and all(pod.status.phase == "Running" for pod in traefik_pods.items)
+        svc_status = len(traefik_svc.items) > 0
+        
+        if pod_status and svc_status:
             services.append(HealthStatus(
                 service="Traefik",
                 status="healthy",
-                message="Ingress controller running",
+                message=f"Ingress controller ready ({len(traefik_pods.items)} pods)",
                 timestamp=datetime.now()
             ))
         else:
@@ -484,11 +527,151 @@ async def get_services_health():
         services.append(HealthStatus(
             service="Traefik",
             status="error",
-            message=f"Failed to check: {e}",
+            message=f"Ingress check failed: {e}",
+            timestamp=datetime.now()
+        ))
+    
+    # Check cert-manager (TLS)
+    try:
+        cert_pods = v1.list_namespaced_pod("cert-manager", label_selector="app.kubernetes.io/name=cert-manager")
+        cert_webhook = v1.list_namespaced_pod("cert-manager", label_selector="app.kubernetes.io/name=webhook")
+        cert_cainjector = v1.list_namespaced_pod("cert-manager", label_selector="app.kubernetes.io/name=cainjector")
+        
+        pod_status = (cert_pods.items and all(pod.status.phase == "Running" for pod in cert_pods.items) and
+                     cert_webhook.items and all(pod.status.phase == "Running" for pod in cert_webhook.items) and
+                     cert_cainjector.items and all(pod.status.phase == "Running" for pod in cert_cainjector.items))
+        
+        if pod_status:
+            total_pods = len(cert_pods.items) + len(cert_webhook.items) + len(cert_cainjector.items)
+            services.append(HealthStatus(
+                service="cert-manager",
+                status="healthy",
+                message=f"TLS certificate manager ready ({total_pods} pods)",
+                timestamp=datetime.now()
+            ))
+        else:
+            services.append(HealthStatus(
+                service="cert-manager",
+                status="unhealthy",
+                message="TLS certificate manager not ready",
+                timestamp=datetime.now()
+            ))
+    except Exception as e:
+        services.append(HealthStatus(
+            service="cert-manager",
+            status="error",
+            message=f"TLS manager check failed: {e}",
+            timestamp=datetime.now()
+        ))
+    
+    # Check Local Registry
+    try:
+        # Check if registry service is accessible (it's outside the cluster)
+        import subprocess
+        result = subprocess.run(['docker', 'ps', '--filter', 'name=registry.localhost', '--format', '{{.Status}}'], 
+                              capture_output=True, text=True, timeout=5)
+        
+        if result.returncode == 0 and 'Up' in result.stdout:
+            services.append(HealthStatus(
+                service="Local Registry",
+                status="healthy",
+                message="Container registry available",
+                timestamp=datetime.now()
+            ))
+        else:
+            services.append(HealthStatus(
+                service="Local Registry",
+                status="unhealthy",
+                message="Container registry not accessible",
+                timestamp=datetime.now()
+            ))
+    except Exception as e:
+        services.append(HealthStatus(
+            service="Local Registry",
+            status="warning",
+            message=f"Registry check failed: {e}",
+            timestamp=datetime.now()
+        ))
+    
+    # Check k3d LoadBalancer
+    try:
+        # Check if k3d loadbalancer is running
+        result = subprocess.run(['docker', 'ps', '--filter', 'name=k3d-.*-serverlb', '--format', '{{.Status}}'], 
+                              capture_output=True, text=True, timeout=5)
+        
+        if result.returncode == 0 and 'Up' in result.stdout:
+            services.append(HealthStatus(
+                service="k3d LoadBalancer",
+                status="healthy",
+                message="k3d loadbalancer active",
+                timestamp=datetime.now()
+            ))
+        else:
+            services.append(HealthStatus(
+                service="k3d LoadBalancer",
+                status="unhealthy",
+                message="k3d loadbalancer not found",
+                timestamp=datetime.now()
+            ))
+    except Exception as e:
+        services.append(HealthStatus(
+            service="k3d LoadBalancer",
+            status="error",
+            message=f"LoadBalancer check failed: {e}",
             timestamp=datetime.now()
         ))
     
     return services
+
+
+@app.get("/gitops")
+async def gitops_platform_status():
+    """Get comprehensive GitOps platform status"""
+    try:
+        services = await get_services_health()
+        nodes_data = await nodes_status()
+        pods_data = await pods_status()
+        
+        # Calculate overall platform health
+        healthy_services = sum(1 for svc in services if svc.status == "healthy")
+        total_services = len(services)
+        
+        # Get running pods count
+        running_pods = sum(1 for pod in pods_data if pod.ready)
+        total_pods = len(pods_data)
+        
+        # Get ready nodes count  
+        ready_nodes = sum(1 for node in nodes_data if node.ready)
+        total_nodes = len(nodes_data)
+        
+        platform_healthy = (healthy_services == total_services and 
+                           ready_nodes == total_nodes and
+                           running_pods >= total_pods * 0.9)  # Allow 10% pod tolerance
+        
+        return {
+            "platform_healthy": platform_healthy,
+            "services": {
+                "healthy": healthy_services,
+                "total": total_services,
+                "details": services
+            },
+            "infrastructure": {
+                "nodes_ready": f"{ready_nodes}/{total_nodes}",
+                "pods_running": f"{running_pods}/{total_pods}",
+                "pod_success_rate": round((running_pods / total_pods * 100) if total_pods > 0 else 0, 1)
+            },
+            "components": {
+                "gitops": next((s for s in services if s.service == "ArgoCD"), None),
+                "git_repository": next((s for s in services if s.service == "Gitea"), None),
+                "ingress": next((s for s in services if s.service == "Traefik"), None),
+                "tls_manager": next((s for s in services if s.service == "cert-manager"), None),
+                "registry": next((s for s in services if s.service == "Local Registry"), None),
+                "loadbalancer": next((s for s in services if s.service == "k3d LoadBalancer"), None)
+            },
+            "timestamp": datetime.now()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get GitOps status: {e}")
 
 
 @app.get("/argocd")

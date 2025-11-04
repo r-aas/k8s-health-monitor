@@ -171,6 +171,9 @@ tasks:
         echo "  ✓ Cluster status..."
         curl -sk "$BASE_URL/cluster" | jq -r .healthy
         
+        echo "  ✓ GitOps platform..."
+        curl -sk "$BASE_URL/gitops" | jq -r '.platform_healthy, .services.healthy, .services.total'
+        
         echo "  ✓ System resources..."
         curl -sk "$BASE_URL/processes/system" | jq -r '.cpu_percent, .memory_percent'
         
